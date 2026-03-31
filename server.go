@@ -1,53 +1,128 @@
 package sseserver
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
 	"sync"
+	"sync/atomic"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 )
 
-// 全局变量声明
 var (
-	sseServer *Server   // SSE服务器实例
-	once      sync.Once // 确保单例模式的并发安全
+	ErrServerClosed         = errors.New("sseserver: server closed")
+	ErrServerNotInitialized = errors.New("sseserver: server not initialized")
 )
 
-// Server 结构体定义了SSE服务器的基本结构
+// Server manages SSE subscriptions and message publishing.
 type Server struct {
-	Broadcast chan<- SSEMessage // 广播通道,只写
-	hub       *hub              // 内部连接集线器
+	hub       *hub
+	closeOnce sync.Once
+	closed    atomic.Bool
 }
 
-// NewServer 创建并初始化一个新的SSE服务器实例
-func newServer() *Server {
-	s := Server{
-		hub: newHub(), // 初始化内部hub
+// New creates a new SSE server instance.
+func New(opts ...Option) *Server {
+	cfg := defaultConfig()
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
 	}
 
-	// 启动内部连接hub
-	// hub作为Server的私有成员维护所有连接
+	s := &Server{
+		hub: newHub(cfg),
+	}
 	s.hub.Start()
-
-	// 将hub的广播通道暴露为Server的公开只写通道
-	s.Broadcast = s.hub.broadcast
-
-	return &s
+	return s
 }
 
-func Subscribe(ctx *fiber.Ctx, namespace string) error {
-	once.Do(func() {
-		sseServer = newServer()
-	})
-	return connect(ctx, sseServer.hub, namespace)
-}
-
-func SendSseMessage(msg SSEMessage) {
-	sseServer.Broadcast <- msg
-}
-
-func Close() {
-	if sseServer != nil && sseServer.hub != nil {
-		close(sseServer.hub.broadcast)
-		sseServer.hub.Shutdown()
+// Handler returns a Fiber handler that subscribes the request to a namespace.
+func (s *Server) Handler(namespace string) fiber.Handler {
+	return func(ctx fiber.Ctx) error {
+		return s.Subscribe(ctx, namespace)
 	}
+}
+
+// Subscribe registers the current request as an SSE subscriber.
+func (s *Server) Subscribe(ctx fiber.Ctx, namespace string) error {
+	h, err := s.availableHub()
+	if err != nil {
+		return err
+	}
+	return connect(ctx, h, namespace)
+}
+
+// Publish sends a message to all subscribers in the same namespace.
+func (s *Server) Publish(msg Message) error {
+	return s.publish(msg, true)
+}
+
+func (s *Server) publish(msg Message, cloneData bool) error {
+	h, err := s.availableHub()
+	if err != nil {
+		return err
+	}
+
+	if cloneData {
+		msg = msg.clone()
+	}
+
+	select {
+	case <-h.shutdown:
+		return ErrServerClosed
+	case h.broadcast <- msg:
+		return nil
+	}
+}
+
+// PublishEvent publishes raw bytes with an event name.
+func (s *Server) PublishEvent(namespace, event string, data []byte) error {
+	return s.Publish(Message{
+		Event:     event,
+		Data:      data,
+		Namespace: namespace,
+	})
+}
+
+// PublishJSON marshals a payload and publishes it as SSE data.
+func (s *Server) PublishJSON(namespace, event string, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal SSE payload: %w", err)
+	}
+
+	return s.publish(Message{
+		Event:     event,
+		Data:      data,
+		Namespace: namespace,
+	}, false)
+}
+
+// Close shuts down the server and disconnects all subscribers.
+func (s *Server) Close() {
+	if s == nil {
+		return
+	}
+
+	s.closeOnce.Do(func() {
+		s.closed.Store(true)
+		if s.hub != nil {
+			s.hub.Shutdown()
+		}
+	})
+}
+
+func (s *Server) availableHub() (*hub, error) {
+	if s == nil {
+		return nil, ErrServerClosed
+	}
+	if s.closed.Load() {
+		return nil, ErrServerClosed
+	}
+	if s.hub == nil {
+		return nil, ErrServerNotInitialized
+	}
+	return s.hub, nil
 }

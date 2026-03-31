@@ -1,7 +1,6 @@
 package sseserver
 
 import (
-	"strings"
 	"sync"
 	"time"
 )
@@ -10,22 +9,25 @@ import (
 //
 // Hub 是 Server 的"核心"，但保持私有以隐藏实现细节
 type hub struct {
-	broadcast   chan SSEMessage  // 需要广播的入站消息
-	connections sync.Map         // 已注册的连接
-	register    chan *connection // 连接注册请求通道
-	unregister  chan *connection // 连接注销请求通道
-	shutdown    chan bool        // 内部关闭通知通道
-	sentMsgs    uint64           // 启动以来广播的消息数
-	startupTime time.Time        // Hub 创建时间
+	broadcast    chan Message     // 需要广播的入站消息
+	connections  sync.Map         // 已注册的连接
+	register     chan *connection // 连接注册请求通道
+	unregister   chan *connection // 连接注销请求通道
+	shutdown     chan struct{}    // 内部关闭通知通道
+	shutdownOnce sync.Once        // 保证 Shutdown 幂等
+	config       config           // Server 配置
+	sentMsgs     uint64           // 启动以来广播的消息数
+	startupTime  time.Time        // Hub 创建时间
 }
 
 // 创建新的 Hub 实例
-func newHub() *hub {
+func newHub(cfg config) *hub {
 	return &hub{
-		broadcast:   make(chan SSEMessage),
+		broadcast:   make(chan Message, cfg.publishBuffer),
 		register:    make(chan *connection),
 		unregister:  make(chan *connection),
-		shutdown:    make(chan bool),
+		shutdown:    make(chan struct{}),
+		config:      cfg,
 		startupTime: time.Now(),
 	}
 }
@@ -35,7 +37,9 @@ func newHub() *hub {
 // 目前仅在测试中使用，未来可能需要在生产环境中更优雅地关闭 Server
 // TODO: 在更广泛暴露此接口之前需要深入思考
 func (h *hub) Shutdown() {
-	h.shutdown <- true
+	h.shutdownOnce.Do(func() {
+		close(h.shutdown)
+	})
 }
 
 // Start 在后台 goroutine 中启动 hub 的主运行循环
@@ -81,16 +85,16 @@ func (h *hub) _shutdownConn(c *connection) {
 	// 这样可以避免向已关闭的通道发送数据导致 panic
 	h._unregisterConn(c)
 	// 关闭连接的发送通道，这将导致其退出事件循环并返回到 HTTP 处理器
-	close(c.send)
+	c.closeSend()
 }
 
 // _broadcastMessage 向所有匹配的客户端广播消息
 // 如果由于任何客户端的发送缓冲区已满而失败，将关闭该连接
-func (h *hub) _broadcastMessage(msg SSEMessage) {
+func (h *hub) _broadcastMessage(msg Message) {
 	formattedMsg := msg.sseFormat()
 	h.connections.Range(func(k, v interface{}) bool {
 		c := k.(*connection)
-		if strings.HasPrefix(msg.Namespace, c.namespace) {
+		if msg.Namespace == c.namespace {
 			select {
 			case c.send <- formattedMsg:
 			default:
@@ -112,15 +116,4 @@ func (h *hub) _broadcastMessage(msg SSEMessage) {
 		}
 		return true
 	})
-}
-
-func stop(h *hub, namespace string) bool {
-	h.connections.Range(func(k, v interface{}) bool {
-		c := k.(*connection)
-		if namespace == c.namespace {
-			h._shutdownConn(c)
-		}
-		return true
-	})
-	return false
 }
