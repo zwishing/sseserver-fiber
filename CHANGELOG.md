@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
+## [0.0.3] - 2026-04-01
+
+### Added
+- Added topic-aware APIs: `HandlerWithTopic`, `SubscribeWithTopic`, `PublishEventWithTopic`, and `PublishJSONWithTopic`
+- Added topic coverage tests for exact namespace/topic matching and namespace-level broadcast fallback
+
+### Changed
+- Extended message routing from namespace-only to namespace + topic
+- Kept existing namespace-only APIs as backward-compatible shortcuts using empty-topic routing
+- Updated README and example app to demonstrate topic-based subscription and publishing
+
 ## [0.0.2] - 2026-03-31
 
 ### Added

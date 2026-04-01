@@ -19,7 +19,7 @@ func main() {
 		AllowHeaders: []string{"Cache-Control"},
 	}))
 
-	app.Get("/sse", sse.Handler("progress"))
+	app.Get("/sse", sse.HandlerWithTopic("tenant-a", "progress"))
 
 	go func() {
 		ticker := time.NewTicker(1000 * time.Millisecond)
@@ -27,7 +27,7 @@ func main() {
 
 		for i := 1; i <= 100; i++ {
 			<-ticker.C
-			if err := sse.PublishEvent("progress", "processing-percent", []byte(fmt.Sprintf("%d%%", i))); err != nil {
+			if err := sse.PublishEventWithTopic("tenant-a", "progress", "processing-percent", []byte(fmt.Sprintf("%d%%", i))); err != nil {
 				return
 			}
 		}
