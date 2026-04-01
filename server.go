@@ -41,17 +41,27 @@ func New(opts ...Option) *Server {
 // Handler returns a Fiber handler that subscribes the request to a namespace.
 func (s *Server) Handler(namespace string) fiber.Handler {
 	return func(ctx fiber.Ctx) error {
-		return s.Subscribe(ctx, namespace)
+		return s.SubscribeWithTopic(ctx, namespace, "")
+	}
+}
+
+func (s *Server) HandlerWithTopic(namespace, topic string) fiber.Handler {
+	return func(ctx fiber.Ctx) error {
+		return s.SubscribeWithTopic(ctx, namespace, topic)
 	}
 }
 
 // Subscribe registers the current request as an SSE subscriber.
 func (s *Server) Subscribe(ctx fiber.Ctx, namespace string) error {
+	return s.SubscribeWithTopic(ctx, namespace, "")
+}
+
+func (s *Server) SubscribeWithTopic(ctx fiber.Ctx, namespace, topic string) error {
 	h, err := s.availableHub()
 	if err != nil {
 		return err
 	}
-	return connect(ctx, h, namespace)
+	return connect(ctx, h, namespace, topic)
 }
 
 // Publish sends a message to all subscribers in the same namespace.
@@ -79,15 +89,24 @@ func (s *Server) publish(msg Message, cloneData bool) error {
 
 // PublishEvent publishes raw bytes with an event name.
 func (s *Server) PublishEvent(namespace, event string, data []byte) error {
+	return s.PublishEventWithTopic(namespace, "", event, data)
+}
+
+func (s *Server) PublishEventWithTopic(namespace, topic, event string, data []byte) error {
 	return s.Publish(Message{
 		Event:     event,
 		Data:      data,
 		Namespace: namespace,
+		Topic:     topic,
 	})
 }
 
 // PublishJSON marshals a payload and publishes it as SSE data.
 func (s *Server) PublishJSON(namespace, event string, payload any) error {
+	return s.PublishJSONWithTopic(namespace, "", event, payload)
+}
+
+func (s *Server) PublishJSONWithTopic(namespace, topic, event string, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal SSE payload: %w", err)
@@ -97,6 +116,7 @@ func (s *Server) PublishJSON(namespace, event string, payload any) error {
 		Event:     event,
 		Data:      data,
 		Namespace: namespace,
+		Topic:     topic,
 	}, false)
 }
 

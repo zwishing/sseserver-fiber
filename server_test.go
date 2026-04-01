@@ -54,6 +54,10 @@ func TestZeroValueServerReturnsInitializationError(t *testing.T) {
 	if err := s.Subscribe(nil, "progress"); !errors.Is(err, ErrServerNotInitialized) {
 		t.Fatalf("Subscribe() error = %v, want %v", err, ErrServerNotInitialized)
 	}
+
+	if err := s.SubscribeWithTopic(nil, "progress", "tenant-a"); !errors.Is(err, ErrServerNotInitialized) {
+		t.Fatalf("SubscribeWithTopic() error = %v, want %v", err, ErrServerNotInitialized)
+	}
 }
 
 func TestZeroValueServerCloseDoesNotPanic(t *testing.T) {
@@ -97,5 +101,58 @@ func TestHubBroadcastMatchesNamespaceExactly(t *testing.T) {
 	case <-other.send:
 		t.Fatal("unexpected message delivered to different namespace")
 	default:
+	}
+}
+
+func TestHubBroadcastMatchesNamespaceAndTopic(t *testing.T) {
+	h := newHub(defaultConfig())
+	match := &connection{send: make(chan []byte, 1), namespace: "sse", topic: "order"}
+	otherTopic := &connection{send: make(chan []byte, 1), namespace: "sse", topic: "payment"}
+
+	h.connections.Store(match, true)
+	h.connections.Store(otherTopic, true)
+
+	h._broadcastMessage(Message{
+		Namespace: "sse",
+		Topic:     "order",
+		Data:      []byte("payload"),
+	})
+
+	select {
+	case <-match.send:
+	default:
+		t.Fatal("expected same namespace/topic subscriber to receive message")
+	}
+
+	select {
+	case <-otherTopic.send:
+		t.Fatal("unexpected message delivered to different topic")
+	default:
+	}
+}
+
+func TestHubBroadcastWithoutTopicBroadcastsToNamespace(t *testing.T) {
+	h := newHub(defaultConfig())
+	firstTopic := &connection{send: make(chan []byte, 1), namespace: "sse", topic: "order"}
+	secondTopic := &connection{send: make(chan []byte, 1), namespace: "sse", topic: "payment"}
+
+	h.connections.Store(firstTopic, true)
+	h.connections.Store(secondTopic, true)
+
+	h._broadcastMessage(Message{
+		Namespace: "sse",
+		Data:      []byte("payload"),
+	})
+
+	select {
+	case <-firstTopic.send:
+	default:
+		t.Fatal("expected namespace subscriber with topic order to receive message")
+	}
+
+	select {
+	case <-secondTopic.send:
+	default:
+		t.Fatal("expected namespace subscriber with topic payment to receive message")
 	}
 }
