@@ -85,7 +85,7 @@ func (h *hub) _broadcastMessage(msg Message) {
 	formattedMsg := msg.sseFormat()
 	h.connections.Range(func(k, v interface{}) bool {
 		c := k.(*connection)
-		if msg.Namespace == c.namespace {
+		if msg.Namespace == c.namespace && (msg.Topic == "" || msg.Topic == c.topic) {
 			select {
 			case c.send <- formattedMsg:
 			default:

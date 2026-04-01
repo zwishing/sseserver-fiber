@@ -17,22 +17,25 @@ type connection struct {
 	created   time.Time
 	send      chan []byte
 	namespace string
+	topic     string
 	msgsSent  uint64
 	closeOnce sync.Once
 }
 
-func newConnection(ctx fiber.Ctx, namespace string, bufferSize int) *connection {
+func newConnection(ctx fiber.Ctx, namespace, topic string, bufferSize int) *connection {
 	return &connection{
 		ctx:       ctx,
 		send:      make(chan []byte, bufferSize),
 		created:   time.Now(),
 		namespace: namespace,
+		topic:     topic,
 	}
 }
 
 type connectionStatus struct {
 	Path      string `json:"request_path"`
 	Namespace string `json:"namespace"`
+	Topic     string `json:"topic"`
 	Created   int64  `json:"created_at"`
 	ClientIP  string `json:"client_ip"`
 	UserAgent string `json:"user_agent"`
@@ -43,6 +46,7 @@ func (c *connection) Status() connectionStatus {
 	return connectionStatus{
 		Path:      c.ctx.Path(),
 		Namespace: c.namespace,
+		Topic:     c.topic,
 		Created:   c.created.Unix(),
 		ClientIP:  c.ctx.IP(),
 		UserAgent: c.ctx.Get("User-Agent"),
@@ -104,10 +108,10 @@ func setupSSEHeaders(c fiber.Ctx) {
 	c.Set("Transfer-Encoding", "chunked")
 }
 
-func connect(c fiber.Ctx, h *hub, namespace string) error {
+func connect(c fiber.Ctx, h *hub, namespace, topic string) error {
 	setupSSEHeaders(c)
 
-	conn := newConnection(c, namespace, h.config.connectionBuffer)
+	conn := newConnection(c, namespace, topic, h.config.connectionBuffer)
 
 	select {
 	case <-h.shutdown:

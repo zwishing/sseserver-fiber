@@ -2,11 +2,11 @@ package sseserver
 
 import "bytes"
 
-// Message is an SSE payload routed by namespace.
 type Message struct {
 	Event     string
 	Data      []byte
 	Namespace string
+	Topic     string
 }
 
 // SSEMessage is kept as an alias for callers that still use the old type name.
