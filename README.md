@@ -33,7 +33,7 @@ func main() {
 		AllowHeaders: []string{"Cache-Control"},
 	}))
 
-	app.Get("/sse", sse.HandlerWithTopic("progress", "tenant-a"))
+	app.Get("/sse", sse.HandlerWithTopic("tenant-a", "progress"))
 
 	go func() {
 		ticker := time.NewTicker(1000 * time.Millisecond)
@@ -41,7 +41,7 @@ func main() {
 
 		for i := 1; i <= 100; i++ {
 			<-ticker.C
-			_ = sse.PublishEventWithTopic("progress", "tenant-a", "processing-percent", []byte(fmt.Sprintf("%d%%", i)))
+			_ = sse.PublishEventWithTopic("tenant-a", "progress", "processing-percent", []byte(fmt.Sprintf("%d%%", i)))
 		}
 	}()
 
@@ -67,7 +67,21 @@ func main() {
 
 `Handler` / `PublishEvent` / `PublishJSON` remain namespace-only shortcuts and internally use an empty topic.
 
+## Runtime behavior
+
+- Subscriptions copy namespace/topic keys, including values read from Fiber requests. Publish methods copy event and routing strings; raw publish methods also copy the payload bytes.
+- New streams send a `:connected` comment immediately, followed by periodic `:keepalive` comments. `HEAD` requests return headers without creating a subscription.
+- Event names containing CR or LF return `ErrInvalidEventName`. Payload CR/CRLF line endings become LF; leading spaces and empty lines are preserved. Use JSON when the application must preserve literal carriage returns.
+- Full subscriber queues cancel that subscriber's stream and interrupt blocked writes. `Close` signals shutdown and discards pending messages; it does not wait for all HTTP connections to finish or shut down the Fiber app.
+
 ## Options
 
 - `WithConnectionBuffer(size int)`
+- `WithPublishBuffer(size int)`
 - `WithKeepAliveInterval(interval time.Duration)`
+
+## Documentation
+
+The bilingual OINK documentation site lives in [`site/`](site/README.md). It
+includes a quick start, routing and publishing guides, the complete public API,
+configuration defaults, and runtime behavior.

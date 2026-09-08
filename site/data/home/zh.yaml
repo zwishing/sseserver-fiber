@@ -1,0 +1,37 @@
+sections: [hero, cards, cta]
+
+hero:
+  align: center
+  eyebrow: 面向 Fiber v3 的 Server-Sent Events
+  title_lines:
+    - words: [{ text: 持续推送状态， }]
+    - words: [{ text: 精确路由消息。 }]
+  lead: 一个轻量的进程内 SSE 代理，支持命名空间、主题、保活与显式生命周期管理。
+  actions:
+    - { label: 快速开始, url: docs/get-started/, icon: fa-solid fa-rocket, style: primary }
+    - { label: API 参考, url: docs/reference/api/, icon: fa-solid fa-code, style: ghost }
+
+cards:
+  eyebrow: 小而明确的接口
+  title: 应用级 SSE 所需的核心能力
+  columns: 3
+  items:
+    - title: Fiber 原生处理器
+      desc: 用一个处理器把长连接事件流挂载到 Fiber v3 路由。
+      icon: fa-solid fa-plug
+      url: docs/get-started/
+    - title: 命名空间与主题路由
+      desc: 在命名空间内广播，或按主题精确投递。
+      icon: fa-solid fa-route
+      url: docs/guides/routing/
+    - title: 有界的慢消费者处理
+      desc: 配置队列、保持连接，并断开停止消费的客户端。
+      icon: fa-solid fa-gauge-high
+      url: docs/reference/runtime/
+
+cta:
+  title: 发送第一条事件。
+  text: 安装包、注册路由，然后发布一个具名事件。
+  label: 跟随快速开始
+  url: docs/get-started/quickstart/
+  style: primary

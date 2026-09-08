@@ -1,0 +1,37 @@
+sections: [hero, cards, cta]
+
+hero:
+  align: center
+  eyebrow: Server-Sent Events for Fiber v3
+  title_lines:
+    - words: [{ text: Stream updates. }]
+    - words: [{ text: Route them precisely. }]
+  lead: A small in-process SSE broker with namespaces, topics, keepalives, and explicit lifecycle management.
+  actions:
+    - { label: Get started, url: docs/get-started/, icon: fa-solid fa-rocket, style: primary }
+    - { label: API reference, url: docs/reference/api/, icon: fa-solid fa-code, style: ghost }
+
+cards:
+  eyebrow: Small surface, defined behavior
+  title: Everything needed for application-level SSE
+  columns: 3
+  items:
+    - title: Fiber-native handlers
+      desc: Attach a long-lived event stream to a Fiber v3 route with one handler.
+      icon: fa-solid fa-plug
+      url: docs/get-started/
+    - title: Namespace and topic routing
+      desc: Broadcast broadly within a namespace or target one topic exactly.
+      icon: fa-solid fa-route
+      url: docs/guides/routing/
+    - title: Bounded slow-consumer handling
+      desc: Configure queues, keep streams alive, and disconnect clients that stop draining.
+      icon: fa-solid fa-gauge-high
+      url: docs/reference/runtime/
+
+cta:
+  title: Send your first event.
+  text: Install the package, register a route, and publish a named event.
+  label: Follow the quick start
+  url: docs/get-started/quickstart/
+  style: primary

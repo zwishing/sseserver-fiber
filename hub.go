@@ -1,32 +1,24 @@
 package sseserver
 
-import (
-	"sync"
-	"time"
-)
+import "sync"
 
 // hub owns active connections and routes messages by namespace.
 type hub struct {
 	broadcast    chan Message     // Inbound publish queue
 	connections  sync.Map         // Active connections
 	register     chan *connection // Registration requests
-	unregister   chan *connection // Unregistration requests
 	shutdown     chan struct{}    // Shutdown signal
 	shutdownOnce sync.Once        // Ensures idempotent shutdown
 	config       config           // Server configuration
-	sentMsgs     uint64           // Total published messages
-	startupTime  time.Time        // Creation time
 }
 
 // newHub creates a hub instance.
 func newHub(cfg config) *hub {
 	return &hub{
-		broadcast:   make(chan Message, cfg.publishBuffer),
-		register:    make(chan *connection),
-		unregister:  make(chan *connection),
-		shutdown:    make(chan struct{}),
-		config:      cfg,
-		startupTime: time.Now(),
+		broadcast: make(chan Message, cfg.publishBuffer),
+		register:  make(chan *connection),
+		shutdown:  make(chan struct{}),
+		config:    cfg,
 	}
 }
 
@@ -56,28 +48,21 @@ func (h *hub) run() {
 		case c := <-h.register:
 			// Register a new connection.
 			h.connections.Store(c, true)
-		case c := <-h.unregister:
-			// Unregister a connection.
-			h._unregisterConn(c)
+			// The response can finish before this goroutine completes registration.
+			select {
+			case <-c.done:
+				h.connections.Delete(c)
+			default:
+			}
 		case msg := <-h.broadcast:
-			// Broadcast a message and increment the counter.
-			h.sentMsgs++
 			h._broadcastMessage(msg)
 		}
 	}
 }
 
-// _unregisterConn removes a connection from the hub.
-func (h *hub) _unregisterConn(c *connection) {
-	h.connections.Delete(c)
-}
-
-// _shutdownConn removes a connection and closes its send queue.
+// _shutdownConn removes a connection and interrupts its response stream.
 func (h *hub) _shutdownConn(c *connection) {
-	// Unregister first to avoid sends to a closed queue.
-	h._unregisterConn(c)
-	// Closing the queue lets the stream writer exit.
-	c.closeSend()
+	c.cancel()
 }
 
 // _broadcastMessage sends a formatted message to matching subscribers.
@@ -87,6 +72,7 @@ func (h *hub) _broadcastMessage(msg Message) {
 		c := k.(*connection)
 		if msg.Namespace == c.namespace && (msg.Topic == "" || msg.Topic == c.topic) {
 			select {
+			case <-c.done:
 			case c.send <- formattedMsg:
 			default:
 				// Drop slow consumers when their queue is full.

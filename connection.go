@@ -1,104 +1,103 @@
 package sseserver
 
 import (
-	"bufio"
+	"io"
+	"net"
+	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/valyala/fasthttp"
 )
 
 const httpOK = 200
 
+// connection is the response body. fasthttp reads it directly, so there is no
+// extra stream-writer goroutine or pipe that can remain blocked after shutdown.
 type connection struct {
-	ctx       fiber.Ctx
-	created   time.Time
-	send      chan []byte
-	namespace string
-	topic     string
-	msgsSent  uint64
-	closeOnce sync.Once
+	hub         *hub
+	send        chan []byte
+	done        chan struct{}
+	keepalive   *time.Ticker
+	namespace   string
+	topic       string
+	pending     []byte // Only the response reader accesses pending.
+	cancelOnce  sync.Once
+	transportMu sync.Mutex
+	transport   net.Conn
+	abortTimer  *time.Timer
 }
 
-func newConnection(ctx fiber.Ctx, namespace, topic string, bufferSize int) *connection {
+func newConnection(transport net.Conn, h *hub, namespace, topic string) *connection {
 	return &connection{
-		ctx:       ctx,
-		send:      make(chan []byte, bufferSize),
-		created:   time.Now(),
-		namespace: namespace,
-		topic:     topic,
+		hub:       h,
+		transport: transport,
+		send:      make(chan []byte, h.config.connectionBuffer),
+		done:      make(chan struct{}),
+		keepalive: time.NewTicker(h.config.keepAlive),
+		namespace: strings.Clone(namespace),
+		topic:     strings.Clone(topic),
+		pending:   []byte(":connected\n"),
 	}
 }
 
-type connectionStatus struct {
-	Path      string `json:"request_path"`
-	Namespace string `json:"namespace"`
-	Topic     string `json:"topic"`
-	Created   int64  `json:"created_at"`
-	ClientIP  string `json:"client_ip"`
-	UserAgent string `json:"user_agent"`
-	MsgsSent  uint64 `json:"msgs_sent"`
-}
-
-func (c *connection) Status() connectionStatus {
-	return connectionStatus{
-		Path:      c.ctx.Path(),
-		Namespace: c.namespace,
-		Topic:     c.topic,
-		Created:   c.created.Unix(),
-		ClientIP:  c.ctx.IP(),
-		UserAgent: c.ctx.Get("User-Agent"),
-		MsgsSent:  atomic.LoadUint64(&c.msgsSent),
+func (c *connection) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
 	}
+	if len(c.pending) == 0 {
+		select {
+		case <-c.done:
+		case c.pending = <-c.send:
+		case <-c.keepalive.C:
+			c.pending = []byte(":keepalive\n")
+		}
+	}
+	// Closing takes priority over draining buffered messages.
+	select {
+	case <-c.done:
+		return 0, io.EOF
+	default:
+	}
+	n := copy(p, c.pending)
+	c.pending = c.pending[n:]
+	return n, nil
 }
 
-func (c *connection) closeSend() {
-	c.closeOnce.Do(func() {
-		close(c.send)
+// Close is called by fasthttp when it releases the response body. Relinquish
+// the transport before its connection wrapper can be returned to a pool.
+func (c *connection) Close() error {
+	c.transportMu.Lock()
+	c.transport = nil
+	if c.abortTimer != nil {
+		c.abortTimer.Stop()
+	}
+	c.transportMu.Unlock()
+	c.cancel()
+	return nil
+}
+
+func (c *connection) cancel() {
+	c.cancelOnce.Do(func() {
+		close(c.done)
+		c.hub.connections.Delete(c)
+		c.keepalive.Stop()
+		c.interruptWrite()
 	})
 }
 
-func write(w *bufio.Writer, data []byte) error {
-	if _, err := w.Write(data); err != nil {
-		return err
+func (c *connection) interruptWrite() {
+	c.transportMu.Lock()
+	defer c.transportMu.Unlock()
+	if c.transport != nil {
+		// Do not Close the transport here: fasthttp may use a pooled wrapper
+		// that must remain valid until its response handling has finished.
+		_ = c.transport.SetWriteDeadline(time.Now())
+		// fasthttp can overwrite the deadline after the handler returns, and
+		// large headers can block before the first body Read. Retry until its
+		// response Close stops this timer and relinquishes the transport.
+		c.abortTimer = time.AfterFunc(10*time.Millisecond, c.interruptWrite)
 	}
-	return w.Flush()
-}
-
-func (c *connection) writer(h *hub) {
-	keepaliveTickler := time.NewTicker(h.config.keepAlive)
-	keepaliveMsg := []byte(":keepalive\n")
-	defer keepaliveTickler.Stop()
-
-	c.ctx.Status(httpOK).RequestCtx().SetBodyStreamWriter(fasthttp.StreamWriter(func(w *bufio.Writer) {
-		for {
-			select {
-			case msg, ok := <-c.send:
-				if !ok {
-					return
-				}
-				if err := write(w, msg); err != nil {
-					select {
-					case h.unregister <- c:
-					case <-h.shutdown:
-					}
-					return
-				}
-				atomic.AddUint64(&c.msgsSent, 1)
-
-			case <-keepaliveTickler.C:
-				if err := write(w, keepaliveMsg); err != nil {
-					select {
-					case h.unregister <- c:
-					case <-h.shutdown:
-					}
-					return
-				}
-			}
-		}
-	}))
 }
 
 func setupSSEHeaders(c fiber.Ctx) {
@@ -108,17 +107,21 @@ func setupSSEHeaders(c fiber.Ctx) {
 	c.Set("Transfer-Encoding", "chunked")
 }
 
-func connect(c fiber.Ctx, h *hub, namespace, topic string) error {
-	setupSSEHeaders(c)
-
-	conn := newConnection(c, namespace, topic, h.config.connectionBuffer)
-
+func connect(ctx fiber.Ctx, h *hub, namespace, topic string) error {
+	setupSSEHeaders(ctx)
+	request := ctx.Status(httpOK).RequestCtx()
+	// Fiber automatically routes HEAD to GET handlers. No stream is needed.
+	if request.IsHead() {
+		return nil
+	}
+	conn := newConnection(request.Conn(), h, namespace, topic)
 	select {
 	case <-h.shutdown:
+		conn.keepalive.Stop()
 		return ErrServerClosed
 	case h.register <- conn:
 	}
-
-	conn.writer(h)
+	// The initial comment flushes headers without waiting for a publish or tick.
+	request.SetBodyStream(conn, -1)
 	return nil
 }

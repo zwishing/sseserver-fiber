@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 The format is based on Keep a Changelog and this project follows Semantic Versioning.
 
+## [0.0.4] - 2026-09-08
+
+### Fixed
+- Copy subscription and publish routing strings so Fiber request reuse cannot change message destinations or event names.
+- Preserve SSE leading spaces and empty lines, normalize CR/CRLF payload line endings, and reject event names containing CR/LF with `ErrInvalidEventName`.
+- Flush new subscriptions immediately, keep heartbeats running, and clean up disconnected clients.
+- Interrupt blocked writes on shutdown or slow-consumer eviction while preserving fasthttp connection-pool ownership.
+- Avoid registering HEAD requests or retaining responses that close during registration, and remove unused status code that retained released Fiber contexts.
+
 ## [0.0.3] - 2026-04-01
 
 ### Added

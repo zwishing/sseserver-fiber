@@ -2,8 +2,12 @@ package sseserver
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/gofiber/fiber/v3"
+	"github.com/valyala/fasthttp"
 )
 
 func TestNewAppliesOptions(t *testing.T) {
@@ -29,6 +33,43 @@ func TestNewAppliesOptions(t *testing.T) {
 	if got := s.hub.config.keepAlive; got != 3*time.Second {
 		t.Fatalf("keepalive = %s, want 3s", got)
 	}
+}
+
+func TestPublishAndSubscribeDuringClose(t *testing.T) {
+	s := New(WithPublishBuffer(1), WithConnectionBuffer(1))
+	defer s.Close()
+	app := fiber.New()
+	started := make(chan struct{}, 1)
+	var workers sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		workers.Go(func() {
+			for j := 0; j < 50; j++ {
+				if err := s.PublishEvent("test", "update", []byte("value")); err != nil && !errors.Is(err, ErrServerClosed) {
+					t.Errorf("publish during close: %v", err)
+				}
+				select {
+				case started <- struct{}{}:
+				default:
+				}
+			}
+		})
+		workers.Go(func() {
+			for j := 0; j < 50; j++ {
+				request := &fasthttp.RequestCtx{}
+				ctx := app.AcquireCtx(request)
+				err := s.Subscribe(ctx, "test")
+				app.ReleaseCtx(ctx)
+				request.Response.Reset()
+				if err != nil && !errors.Is(err, ErrServerClosed) {
+					t.Errorf("subscribe during close: %v", err)
+				}
+			}
+		})
+	}
+	<-started
+	s.Close()
+	workers.Wait()
+	waitFor(t, "subscribers remained after concurrent close", func() bool { return connectionCount(s) == 0 })
 }
 
 func TestServerPublishAfterClose(t *testing.T) {
@@ -72,7 +113,7 @@ func TestMessageFormatMultiline(t *testing.T) {
 	}
 
 	got := string(msg.sseFormat())
-	want := "event:update\ndata:line1\ndata:line2\n\n"
+	want := "event: update\ndata: line1\ndata: line2\n\n"
 	if got != want {
 		t.Fatalf("sseFormat() = %q, want %q", got, want)
 	}

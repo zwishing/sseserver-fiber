@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -13,6 +14,7 @@ import (
 var (
 	ErrServerClosed         = errors.New("sseserver: server closed")
 	ErrServerNotInitialized = errors.New("sseserver: server not initialized")
+	ErrInvalidEventName     = errors.New("sseserver: event name must not contain CR or LF")
 )
 
 // Server manages SSE subscriptions and message publishing.
@@ -40,12 +42,11 @@ func New(opts ...Option) *Server {
 
 // Handler returns a Fiber handler that subscribes the request to a namespace.
 func (s *Server) Handler(namespace string) fiber.Handler {
-	return func(ctx fiber.Ctx) error {
-		return s.SubscribeWithTopic(ctx, namespace, "")
-	}
+	return s.HandlerWithTopic(namespace, "")
 }
 
 func (s *Server) HandlerWithTopic(namespace, topic string) fiber.Handler {
+	namespace, topic = strings.Clone(namespace), strings.Clone(topic)
 	return func(ctx fiber.Ctx) error {
 		return s.SubscribeWithTopic(ctx, namespace, topic)
 	}
@@ -75,9 +76,10 @@ func (s *Server) publish(msg Message, cloneData bool) error {
 		return err
 	}
 
-	if cloneData {
-		msg = msg.clone()
+	if strings.ContainsAny(msg.Event, "\r\n") {
+		return ErrInvalidEventName
 	}
+	msg = msg.clone(cloneData)
 
 	select {
 	case <-h.shutdown:
